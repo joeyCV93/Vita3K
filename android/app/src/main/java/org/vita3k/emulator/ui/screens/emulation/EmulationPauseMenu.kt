@@ -30,7 +30,9 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -62,6 +64,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -77,6 +80,7 @@ import org.vita3k.emulator.data.RestartRequiredSetting
 import org.vita3k.emulator.ui.components.OverlayEditorPalette
 import org.vita3k.emulator.ui.rememberConnectedGamepads
 import org.vita3k.emulator.ui.screens.settings.ControllerMappingSections
+import org.vita3k.emulator.ui.screens.settings.controllerFocusRing
 import org.vita3k.emulator.ui.screens.settings.SettingsCategory
 import org.vita3k.emulator.ui.screens.settings.SettingsCategoryBody
 import org.vita3k.emulator.ui.screens.settings.SettingsCategoryStrip
@@ -164,11 +168,19 @@ private fun EmulationPauseMenu(
         }
     }
 
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     LaunchedEffect(uiState.showMenu) {
         if (uiState.showMenu) {
             selectedTab = PauseMenuTab.Session
         }
         menuVisibilityState.targetState = uiState.showMenu
+        if (uiState.showMenu) {
+            // Custom: give the menu a starting focus so the controller D-pad / A work without touching the screen.
+            // Without a focused item, Compose ignores the arrow keys.
+            kotlinx.coroutines.delay(350)
+            hostView.requestFocus()
+            focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Next)
+        }
     }
 
     LaunchedEffect(uiState.isEditingControls) {
@@ -189,6 +201,32 @@ private fun EmulationPauseMenu(
         hostView.visibility = if (hostVisible) View.VISIBLE else View.GONE
     }
 
+    // Custom: B / Back steps back one level. Anything other than the Session tab goes back to Session; only
+    // Session (the top level) lets the press through to close the menu.
+    val backScope = androidx.compose.runtime.rememberCoroutineScope()
+    SideEffect {
+        sessionViewModel.menuBackHandler = {
+            val popup = org.vita3k.emulator.ui.screens.settings.ControllerBackHandlers.inlinePopup
+            if (popup != null) {
+                popup()
+            } else if (selectedTab != PauseMenuTab.Session) {
+                requestedSettingsScope = null
+                selectedTab = PauseMenuTab.Session
+                // The old tab's content is gone, so give the menu a fresh starting focus
+                backScope.launch {
+                    kotlinx.coroutines.delay(120)
+                    focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Next)
+                }
+                true
+            } else {
+                false
+            }
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(sessionViewModel) {
+        onDispose { sessionViewModel.menuBackHandler = null }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         ControlsEditorBar(
             visibleState = controlsVisibilityState,
@@ -207,6 +245,9 @@ private fun EmulationPauseMenu(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.28f))
+                    // Custom: the backdrop is "tap to close" for touch only. If it can take focus, the controller's
+                    // first focus lands here and pressing A closes the menu instead of pressing a button.
+                    .focusProperties { canFocus = false }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -497,7 +538,7 @@ private fun PauseHeader(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = onClose) {
+            IconButton(onClick = onClose, modifier = Modifier.controllerFocusRing(CircleShape)) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = stringResource(R.string.emulation_menu_close),
@@ -523,6 +564,7 @@ private fun PauseTabRow(
             FilterChip(
                 selected = tab == selected,
                 onClick = { onSelected(tab) },
+                modifier = Modifier.controllerFocusRing(RoundedCornerShape(10.dp)),
                 colors = settingsFilterChipColors(),
                 leadingIcon = {
                     Icon(
@@ -576,7 +618,7 @@ private fun SessionTab(
         ) {
             FilledTonalButton(
                 onClick = { sessionViewModel.togglePause(activity) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Icon(
                     imageVector = if (uiState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
@@ -587,7 +629,7 @@ private fun SessionTab(
             }
             FilledTonalButton(
                 onClick = { sessionViewModel.requestExit() },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null)
                 Spacer(modifier = Modifier.padding(horizontal = 4.dp))
@@ -677,6 +719,7 @@ private fun CustomConfigSection(
                     modifier = Modifier
                         .weight(1f)
                         .height(44.dp)
+                        .controllerFocusRing(CircleShape)
                 ) {
                     Icon(Icons.Default.Save, contentDescription = null)
                     Spacer(modifier = Modifier.padding(horizontal = 3.dp))
@@ -698,6 +741,7 @@ private fun CustomConfigSection(
                     modifier = Modifier
                         .weight(1f)
                         .height(44.dp)
+                        .controllerFocusRing(CircleShape)
                 ) {
                     Icon(Icons.Default.Restore, contentDescription = null)
                     Spacer(modifier = Modifier.padding(horizontal = 3.dp))
@@ -712,7 +756,8 @@ private fun CustomConfigSection(
                 onClick = onOpenSettings,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp),
+                    .height(44.dp)
+                    .controllerFocusRing(CircleShape),
                 enabled = settingsLoaded
             ) {
                 Icon(Icons.Default.Settings, contentDescription = null)
@@ -764,7 +809,7 @@ private fun ControllerTab(
             OutlinedButton(
                 onClick = { globalSettingsViewModel.discardChanges() },
                 enabled = globalSettingsViewModel.isDirty && !globalSettingsViewModel.saving,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Text(stringResource(R.string.settings_discard))
             }
@@ -776,7 +821,7 @@ private fun ControllerTab(
                     }
                 },
                 enabled = globalSettingsViewModel.isDirty && !globalSettingsViewModel.saving,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Icon(Icons.Default.Save, contentDescription = null)
                 Spacer(modifier = Modifier.padding(horizontal = 4.dp))
@@ -883,12 +928,14 @@ private fun EmbeddedSettingsTab(
             FilterChip(
                 selected = activeScope == PauseSettingsScope.Global,
                 onClick = { activeScope = PauseSettingsScope.Global },
+                modifier = Modifier.controllerFocusRing(RoundedCornerShape(10.dp)),
                 colors = settingsFilterChipColors(),
                 label = { Text(stringResource(R.string.settings_title)) }
             )
             FilterChip(
                 selected = activeScope == PauseSettingsScope.CustomConfig,
                 onClick = { activeScope = PauseSettingsScope.CustomConfig },
+                modifier = Modifier.controllerFocusRing(RoundedCornerShape(10.dp)),
                 colors = settingsFilterChipColors(),
                 label = { Text(stringResource(R.string.emulation_custom_config)) }
             )
@@ -901,14 +948,14 @@ private fun EmbeddedSettingsTab(
             OutlinedButton(
                 onClick = { activeViewModel.discardChanges() },
                 enabled = activeViewModel.isDirty && !activeViewModel.saving,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Text(stringResource(R.string.settings_discard))
             }
             FilledTonalButton(
                 onClick = ::saveActiveSettings,
                 enabled = activeViewModel.isDirty && !activeViewModel.saving,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).controllerFocusRing(CircleShape)
             ) {
                 Icon(Icons.Default.Save, contentDescription = null)
                 Spacer(modifier = Modifier.padding(horizontal = 4.dp))

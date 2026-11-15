@@ -2,6 +2,7 @@ package org.vita3k.emulator
 
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -176,6 +177,23 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         prepareFrontendRuntime()
+    }
+
+    // Custom: on a controller, A should activate the focused game/button (Compose only treats Enter / D-pad centre as a click).
+    // Skipped while a settings screen is recording a button, which needs the real A press.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            // Helps confirm which key code a controller button really sends
+            android.util.Log.d("Vita3K-Keys", "key down " + KeyEvent.keyCodeToString(event.keyCode))
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_BUTTON_A && !Emulator.controllerCaptureActive) {
+            val confirm = KeyEvent(
+                event.downTime, event.eventTime, event.action, KeyEvent.KEYCODE_DPAD_CENTER,
+                event.repeatCount, event.metaState, event.deviceId, event.scanCode, event.flags, event.source
+            )
+            return super.dispatchKeyEvent(confirm)
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun ensureStorageAccess() {

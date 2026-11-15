@@ -22,7 +22,20 @@
 #include <input/physical_key.h>
 
 #include <array>
+#include <cstdint>
 #include <functional>
+#include <string>
+
+// Hotkey chords are a bitmask of held controller buttons: bit N is SDL_GamepadButton N,
+// plus two virtual bits for the analog triggers.
+constexpr uint32_t CTRL_CHORD_LEFT_TRIGGER = 1u << 28;
+constexpr uint32_t CTRL_CHORD_RIGHT_TRIGGER = 1u << 29;
+
+// Buttons currently held across all connected controllers (see the chord bit layout above).
+uint32_t ctrl_get_held_chord(EmuEnvState &emuenv);
+// Human readable form, e.g. "L1 + R1 + Start".
+std::string ctrl_chord_to_string(uint32_t chord);
+int ctrl_chord_button_count(uint32_t chord);
 
 std::array<ControllerBinding, 15> get_controller_bindings_ext(EmuEnvState &emuenv);
 SceCtrlExternalInputMode get_type_of_controller(CtrlState &state, int port);

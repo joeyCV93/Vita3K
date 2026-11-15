@@ -87,8 +87,8 @@ class EmulatorConfig {
     // Emulator
     @JvmField var showLiveAreaScreen: Boolean = false
     @JvmField var showCompileShaders: Boolean = true
-    @JvmField var checkForUpdates: Boolean = true
-    @JvmField var checkForUpdatesMode: Int = 1
+    @JvmField var checkForUpdates: Boolean = false
+    @JvmField var checkForUpdatesMode: Int = 0
     @JvmField var archiveLog: Boolean = false
     @JvmField var logCompatWarn: Boolean = false
     @JvmField var logLevel: Int = 0
@@ -96,6 +96,12 @@ class EmulatorConfig {
     @JvmField var performanceOverlayDetail: Int = 0
     @JvmField var performanceOverlayPosition: Int = 0
     @JvmField var screenshotFormat: Int = 1
+
+    // Custom hotkeys: bitmask of controller buttons (bit N = SDL gamepad button N, bit 28 = L2, bit 29 = R2).
+    // 0 means disabled.
+    @JvmField var menuHotkeyChord: Int = 0
+    @JvmField var exitHotkeyChord: Int = 0
+    @JvmField var libraryHotkeyChord: Int = 0
 
     fun copy(): EmulatorConfig = EmulatorConfig().also { config ->
         config.modulesMode = modulesMode
@@ -171,6 +177,9 @@ class EmulatorConfig {
         config.performanceOverlayDetail = performanceOverlayDetail
         config.performanceOverlayPosition = performanceOverlayPosition
         config.screenshotFormat = screenshotFormat
+        config.menuHotkeyChord = menuHotkeyChord
+        config.exitHotkeyChord = exitHotkeyChord
+        config.libraryHotkeyChord = libraryHotkeyChord
     }
 
     override fun equals(other: Any?): Boolean {
@@ -249,7 +258,10 @@ class EmulatorConfig {
             performanceOverlay == other.performanceOverlay &&
             performanceOverlayDetail == other.performanceOverlayDetail &&
             performanceOverlayPosition == other.performanceOverlayPosition &&
-            screenshotFormat == other.screenshotFormat
+            screenshotFormat == other.screenshotFormat &&
+            menuHotkeyChord == other.menuHotkeyChord &&
+            exitHotkeyChord == other.exitHotkeyChord &&
+            libraryHotkeyChord == other.libraryHotkeyChord
     }
 
     override fun hashCode(): Int {
@@ -326,6 +338,9 @@ class EmulatorConfig {
         result = 31 * result + performanceOverlayDetail
         result = 31 * result + performanceOverlayPosition
         result = 31 * result + screenshotFormat
+        result = 31 * result + menuHotkeyChord
+        result = 31 * result + exitHotkeyChord
+        result = 31 * result + libraryHotkeyChord
         return result
     }
 }

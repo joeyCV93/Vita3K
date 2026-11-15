@@ -11,7 +11,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.ViewGroup;
 import android.view.View;
@@ -88,6 +90,8 @@ public class Emulator extends SDLActivity
     private ComposeView imeOverlayView;
     private ComposeView pauseMenuView;
     private EmulationSessionViewModel sessionViewModel;
+    // True while a settings screen is recording a controller button/chord, so B isn't taken as "close menu".
+    public static volatile boolean controllerCaptureActive = false;
     private SettingsViewModel pauseSettingsViewModel;
     private SettingsViewModel pauseGlobalSettingsViewModel;
     private InputManager inputManager;
@@ -323,7 +327,146 @@ public class Emulator extends SDLActivity
             return true;
         }
 
+        // Custom: B closes the in-emulator menu / controls editor, same as Back.
+        // Only while the menu is up, so B stays a normal game button otherwise.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_BUTTON_B
+                && !controllerCaptureActive
+                && sessionViewModel != null
+                && (sessionViewModel.getUiState().getShowMenu()
+                    || sessionViewModel.getUiState().isEditingControls())) {
+            if (event.getAction() == KeyEvent.ACTION_UP && event.getRepeatCount() == 0) {
+                sessionViewModel.handleBackPressed(this);
+            }
+            return true;
+        }
+
+        // Custom: while the in-game menu is open the game's SDL view still has focus, so the D-pad and A never reach
+        // the Compose menu. Send them straight to it (A acts as "confirm").
+        if (!controllerCaptureActive
+                && pauseMenuView != null
+                && sessionViewModel != null
+                && sessionViewModel.getUiState().getShowMenu()) {
+            int code = event.getKeyCode();
+            int mapped = -1;
+            if (code == KeyEvent.KEYCODE_BUTTON_A) {
+                mapped = KeyEvent.KEYCODE_DPAD_CENTER;
+            } else if (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                    || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                mapped = code;
+            }
+            if (mapped != -1) {
+                // The Compose view inside the host only handles keys while it has real view focus.
+                // requestFocusFromTouch also works while the screen is in touch mode.
+                View target = pauseMenuView.getChildCount() > 0 ? pauseMenuView.getChildAt(0) : pauseMenuView;
+                if (!target.isFocused()) {
+                    target.requestFocusFromTouch();
+                }
+                KeyEvent forwarded = new KeyEvent(event.getDownTime(), event.getEventTime(), event.getAction(),
+                        mapped, event.getRepeatCount(), event.getMetaState(), event.getDeviceId(),
+                        event.getScanCode(), event.getFlags(), InputDevice.SOURCE_KEYBOARD);
+                boolean handled = target.dispatchKeyEvent(forwarded);
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    android.util.Log.d("Vita3K-Menu", "forwarded key " + KeyEvent.keyCodeToString(mapped)
+                            + " focused=" + target.isFocused() + " handled=" + handled);
+                }
+                return true;
+            }
+        }
+
         return super.dispatchKeyEvent(event);
+    }
+
+    // Custom: many handhelds (including the AYN Thor) report the D-pad as a joystick "hat" axis, not as arrow keys,
+    // so it never reaches dispatchKeyEvent. While the in-game menu is open, turn hat (and left stick) movement into
+    // arrow-key presses for the menu.
+    private int menuHatX = 0;
+    private int menuHatY = 0;
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        boolean menuOpen = !controllerCaptureActive
+                && pauseMenuView != null
+                && sessionViewModel != null
+                && sessionViewModel.getUiState().getShowMenu();
+        if (!menuOpen) {
+            menuHatX = 0;
+            menuHatY = 0;
+        } else if ((event.getSource() & InputDevice.SOURCE_JOYSTICK) != 0
+                && event.getAction() == MotionEvent.ACTION_MOVE) {
+            int dx = axisDirection(event.getAxisValue(MotionEvent.AXIS_HAT_X), 0.5f);
+            int dy = axisDirection(event.getAxisValue(MotionEvent.AXIS_HAT_Y), 0.5f);
+            if (dx == 0) {
+                dx = axisDirection(event.getAxisValue(MotionEvent.AXIS_X), 0.7f);
+            }
+            if (dy == 0) {
+                dy = axisDirection(event.getAxisValue(MotionEvent.AXIS_Y), 0.7f);
+            }
+            if (dx != menuHatX) {
+                if (menuHatX != 0) {
+                    forwardKeyToMenu(menuHatX < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.ACTION_UP);
+                }
+                if (dx != 0) {
+                    forwardKeyToMenu(dx < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.ACTION_DOWN);
+                }
+                menuHatX = dx;
+            }
+            if (dy != menuHatY) {
+                if (menuHatY != 0) {
+                    forwardKeyToMenu(menuHatY < 0 ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.ACTION_UP);
+                }
+                if (dy != 0) {
+                    forwardKeyToMenu(dy < 0 ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.ACTION_DOWN);
+                }
+                menuHatY = dy;
+            }
+            if (dx != 0 || dy != 0 || menuHatX != 0 || menuHatY != 0) {
+                return true;
+            }
+        }
+        return super.dispatchGenericMotionEvent(event);
+    }
+
+    private static int axisDirection(float value, float threshold) {
+        return value > threshold ? 1 : (value < -threshold ? -1 : 0);
+    }
+
+    private void forwardKeyToMenu(int keyCode, int action) {
+        View target = pauseMenuView.getChildCount() > 0 ? pauseMenuView.getChildAt(0) : pauseMenuView;
+        if (!target.isFocused()) {
+            target.requestFocusFromTouch();
+        }
+        long now = SystemClock.uptimeMillis();
+        KeyEvent forwarded = new KeyEvent(now, now, action, keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD);
+        boolean handled = target.dispatchKeyEvent(forwarded);
+        if (action == KeyEvent.ACTION_DOWN) {
+            android.util.Log.d("Vita3K-Menu", "hat -> " + KeyEvent.keyCodeToString(keyCode)
+                    + " focused=" + target.isFocused() + " handled=" + handled);
+        }
+    }
+
+    // Custom: called from native the moment the "quit Vita3K" chord is pressed. Removes the whole app from the
+    // screen straight away (so ES-DE or the home screen shows at once), then ends the process shortly afterwards,
+    // once the game session has had time to stop and flush its saves.
+    @Keep
+    public void quitProcess() {
+        runOnUiThread(() -> {
+            finishAndRemoveTask();
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                    () -> android.os.Process.killProcess(android.os.Process.myPid()), 1500);
+        });
+    }
+
+    // Custom: called from native when the "game selection screen" chord is pressed. Does exactly what the
+    // Exit button in the in-game menu does (after its confirmation), so the result is identical.
+    @Keep
+    public void showGameLibrary() {
+        runOnUiThread(() -> {
+            if (sessionViewModel != null) {
+                sessionViewModel.confirmExit(this);
+            } else {
+                requestNativeQuit();
+            }
+        });
     }
 
     @Keep
@@ -635,7 +778,10 @@ public class Emulator extends SDLActivity
             }
 
             ensurePauseMenuOnTop();
-            sessionViewModel.openMenu(this, true);
+            // Custom: don't pause the game when opening from a controller button. Pausing raised the native
+            // Resume/Exit pause overlay underneath this menu (two menus at once). Back already opens it
+            // this way, and the menu has its own Pause button.
+            sessionViewModel.openMenu(this, false);
         });
     }
 

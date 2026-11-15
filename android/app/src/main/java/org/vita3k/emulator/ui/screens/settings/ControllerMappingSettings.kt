@@ -6,6 +6,10 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import androidx.annotation.StringRes
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -118,6 +122,7 @@ internal fun ControllerMappingSections(
     val controllerFamily = connectedGamepads.firstOrNull()?.family ?: ControllerFamily.Standard
     var pendingButtonBinding by remember { mutableStateOf<ButtonBindingRow?>(null) }
     var pendingAxisBinding by remember { mutableStateOf<AxisBindingRow?>(null) }
+    var pendingChordTarget by remember { mutableStateOf<ChordTarget?>(null) }
 
     SettingsSectionCard(
         title = stringResource(R.string.settings_controls_connected_title),
@@ -179,6 +184,36 @@ internal fun ControllerMappingSections(
                 onShowHelp = onShowHelp
             )
         }
+    }
+
+    // Custom hotkeys: press a chord (buttons held together) from a controller.
+    SettingsSectionCard(
+        title = "Controller hotkeys",
+        summary = "Hold a combination of buttons to trigger an action without touching the screen.",
+        help = null,
+        onShowHelp = onShowHelp
+    ) {
+        SettingsActionRow(
+            title = "Open menu",
+            value = chordLabel(controllerFamily, cfg.menuHotkeyChord),
+            onClick = { pendingChordTarget = ChordTarget.Menu },
+            help = null,
+            onShowHelp = onShowHelp
+        )
+        SettingsActionRow(
+            title = "Game selection screen",
+            value = chordLabel(controllerFamily, cfg.libraryHotkeyChord),
+            onClick = { pendingChordTarget = ChordTarget.Library },
+            help = null,
+            onShowHelp = onShowHelp
+        )
+        SettingsActionRow(
+            title = "Quit Vita3K completely",
+            value = chordLabel(controllerFamily, cfg.exitHotkeyChord),
+            onClick = { pendingChordTarget = ChordTarget.Exit },
+            help = null,
+            onShowHelp = onShowHelp
+        )
     }
 
     SettingsSectionCard(
@@ -243,6 +278,29 @@ internal fun ControllerMappingSections(
         )
     }
 
+    pendingChordTarget?.let { target ->
+        ChordCaptureDialog(
+            title = when (target) {
+                ChordTarget.Menu -> "Open menu"
+                ChordTarget.Library -> "Game selection screen"
+                ChordTarget.Exit -> "Quit Vita3K completely"
+            },
+            family = controllerFamily,
+            connected = connectedGamepads.isNotEmpty(),
+            onDismiss = { pendingChordTarget = null },
+            onChord = { chord ->
+                onUpdate {
+                    when (target) {
+                        ChordTarget.Menu -> menuHotkeyChord = chord
+                        ChordTarget.Library -> libraryHotkeyChord = chord
+                        ChordTarget.Exit -> exitHotkeyChord = chord
+                    }
+                }
+                pendingChordTarget = null
+            }
+        )
+    }
+
     pendingAxisBinding?.let { row ->
         BindingCaptureDialog(
             title = stringResource(row.labelRes),
@@ -275,6 +333,18 @@ private fun BindingCaptureDialog(
     onDismiss: () -> Unit,
     onSelected: (Int) -> Unit
 ) {
+    // Capture only starts once Record is chosen, so the controller can also reach Cancel.
+    var recording by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(0) } // 0 Record, 1 Cancel
+    val activate: () -> Unit = {
+        if (selected == 0) recording = true else onDismiss()
+    }
+    androidx.compose.runtime.LaunchedEffect(recording) {
+        if (recording) {
+            kotlinx.coroutines.delay(8000)
+            recording = false
+        }
+    }
     Dialog(onDismissRequest = onDismiss) {
         ApplyDialogDim()
         Surface(
@@ -283,18 +353,15 @@ private fun BindingCaptureDialog(
             color = MaterialTheme.colorScheme.surfaceContainerHigh
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                modifier = Modifier
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = prompt,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (connectedGamepads.isNotEmpty()) {
                     Text(
@@ -306,8 +373,32 @@ private fun BindingCaptureDialog(
                 CaptureInputSurface(
                     captureMode = captureMode,
                     enabled = connectedGamepads.isNotEmpty(),
-                    onCaptured = onSelected
+                    recording = recording,
+                    onCaptured = onSelected,
+                    onNav = { delta -> selected = (selected + delta).coerceIn(0, 1) },
+                    onActivate = activate,
+                    onBack = onDismiss
                 )
+                // Record / Cancel sit right under the prompt so they stay on screen on short (landscape) displays.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    val ring = MaterialTheme.colorScheme.primary
+                    fun ringFor(index: Int) = if (selected == index && !recording) {
+                        Modifier
+                            .background(ring.copy(alpha = 0.30f), CircleShape)
+                            .border(4.dp, ring, CircleShape)
+                    } else Modifier
+                    TextButton(
+                        onClick = { selected = 0; activate() },
+                        modifier = ringFor(0)
+                    ) { Text(if (recording) "Recording..." else "Record") }
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = ringFor(1)
+                    ) { Text(stringResource(R.string.action_cancel)) }
+                }
                 SettingsScrollableChoiceSelector(
                     title = stringResource(R.string.settings_controls_manual_selection),
                     options = options.map { it.label },
@@ -317,14 +408,6 @@ private fun BindingCaptureDialog(
                     help = null,
                     onShowHelp = {}
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                }
             }
         }
     }
@@ -334,7 +417,11 @@ private fun BindingCaptureDialog(
 private fun CaptureInputSurface(
     captureMode: CaptureMode,
     enabled: Boolean,
-    onCaptured: (Int) -> Unit
+    recording: Boolean,
+    onCaptured: (Int) -> Unit,
+    onNav: (Int) -> Unit,
+    onActivate: () -> Unit,
+    onBack: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -346,7 +433,9 @@ private fun CaptureInputSurface(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = if (enabled) {
+                text = if (enabled && !recording) {
+                    "Press Record, then the button or stick to assign. D-pad left/right and A choose below, B cancels."
+                } else if (enabled) {
                     stringResource(R.string.settings_controls_capture_listening)
                 } else {
                     stringResource(R.string.settings_controls_capture_waiting_for_controller)
@@ -356,14 +445,15 @@ private fun CaptureInputSurface(
             )
             AndroidView(
                 factory = { context ->
-                    GamepadCaptureView(context).apply {
-                        this.captureMode = captureMode
-                        this.onCaptured = onCaptured
-                    }
+                    GamepadCaptureView(context)
                 },
                 update = { view ->
                     view.captureMode = captureMode
+                    view.recording = recording
                     view.onCaptured = onCaptured
+                    view.onNav = onNav
+                    view.onActivate = onActivate
+                    view.onBack = onBack
                     if (enabled) {
                         view.post {
                             view.requestFocusFromTouch()
@@ -373,7 +463,7 @@ private fun CaptureInputSurface(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
+                    .height(4.dp)
             )
         }
     }
@@ -390,13 +480,37 @@ private class GamepadCaptureView(context: Context) : View(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        org.vita3k.emulator.Emulator.controllerCaptureActive = true
         post {
             requestFocusFromTouch()
             requestFocus()
         }
     }
 
+    override fun onDetachedFromWindow() {
+        org.vita3k.emulator.Emulator.controllerCaptureActive = false
+        super.onDetachedFromWindow()
+    }
+
+    var recording = false
+    var onNav: (Int) -> Unit = {}
+    var onActivate: () -> Unit = {}
+    var onBack: () -> Unit = {}
+    private var hatX = 0
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!recording) {
+            if (!isGamepadDevice(event.device)) return super.dispatchKeyEvent(event)
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> onNav(-1)
+                    KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> onNav(1)
+                    KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> onActivate()
+                    KeyEvent.KEYCODE_BUTTON_B -> onBack()
+                }
+            }
+            return true
+        }
         if (captureMode != CaptureMode.Button) {
             return super.dispatchKeyEvent(event)
         }
@@ -410,6 +524,16 @@ private class GamepadCaptureView(context: Context) : View(context) {
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!recording) {
+            if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK)) return super.onGenericMotionEvent(event)
+            val x = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+            val dir = if (x < -0.5f) -1 else if (x > 0.5f) 1 else 0
+            if (dir != hatX) {
+                hatX = dir
+                if (dir != 0) onNav(dir)
+            }
+            return true
+        }
         if (captureMode != CaptureMode.Axis || !event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
             return super.onGenericMotionEvent(event)
         }
@@ -591,4 +715,271 @@ private fun axisLabel(family: ControllerFamily, axis: Int): String {
         }
         else -> "Axis $axis"
     }
+}
+
+// ---- Custom controller hotkey chords -------------------------------------------------------------
+// A chord is a bitmask: bit N = SDL gamepad button N, bit 28 = L2, bit 29 = R2. It must match
+// ctrl_get_held_chord() on the native side. 0 means "not set".
+
+private enum class ChordTarget {
+    Menu,
+    Library,
+    Exit
+}
+
+private const val CHORD_LEFT_TRIGGER_BIT = 1 shl 28
+private const val CHORD_RIGHT_TRIGGER_BIT = 1 shl 29
+private const val MIN_CHORD_BUTTONS = 2
+
+@Composable
+private fun ChordCaptureDialog(
+    title: String,
+    family: ControllerFamily,
+    connected: Boolean,
+    onDismiss: () -> Unit,
+    onChord: (Int) -> Unit
+) {
+    var preview by remember { mutableStateOf(0) }
+    // Recording only starts when "Record" is chosen, so the controller can also reach Clear and Cancel.
+    var recording by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(0) } // 0 Record, 1 Clear, 2 Cancel
+    val activate: () -> Unit = {
+        when (selected) {
+            0 -> {
+                preview = 0
+                recording = true
+            }
+            1 -> onChord(0)
+            else -> onDismiss()
+        }
+    }
+    // Give up on a recording that has seen no new button for a while, so the dialog never traps the controller.
+    androidx.compose.runtime.LaunchedEffect(recording, preview) {
+        if (recording) {
+            kotlinx.coroutines.delay(8000)
+            recording = false
+            preview = 0
+        }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        ApplyDialogDim()
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Choose Record, then hold the buttons you want to use together and let go. Use at least $MIN_CHORD_BUTTONS buttons so it can't trigger by accident. D-pad left/right and A choose a button below, B cancels.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                !connected -> "Connect a controller to record a chord."
+                                !recording -> "Press Record to set a new chord."
+                                preview == 0 -> "Listening for buttons... (gives up after a few seconds)"
+                                else -> chordLabel(family, preview)
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        AndroidView(
+                            factory = { context ->
+                                ChordCaptureView(context)
+                            },
+                            update = { view ->
+                                view.recording = recording
+                                view.onPreview = { preview = it }
+                                view.onChord = onChord
+                                view.onNav = { delta -> selected = (selected + delta).coerceIn(0, 2) }
+                                view.onActivate = activate
+                                view.onBack = onDismiss
+                                if (connected) {
+                                    view.post {
+                                        view.requestFocusFromTouch()
+                                        view.requestFocus()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    val ring = MaterialTheme.colorScheme.primary
+                    fun ringFor(index: Int) = if (selected == index && !recording) {
+                        Modifier
+                            .background(ring.copy(alpha = 0.30f), CircleShape)
+                            .border(4.dp, ring, CircleShape)
+                    } else Modifier
+                    TextButton(
+                        onClick = { selected = 0; activate() },
+                        modifier = ringFor(0)
+                    ) { Text(if (recording) "Recording..." else "Record") }
+                    TextButton(
+                        onClick = { onChord(0) },
+                        modifier = ringFor(1)
+                    ) { Text("Clear") }
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = ringFor(2)
+                    ) { Text(stringResource(R.string.action_cancel)) }
+                }
+            }
+        }
+    }
+}
+
+private class ChordCaptureView(context: Context) : View(context) {
+    var onPreview: (Int) -> Unit = {}
+    var onChord: (Int) -> Unit = {}
+
+    private var held = 0
+    private var peak = 0
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // Stops the emulator treating B / Back as "close the menu" while a button is being recorded.
+        org.vita3k.emulator.Emulator.controllerCaptureActive = true
+        post {
+            requestFocusFromTouch()
+            requestFocus()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        org.vita3k.emulator.Emulator.controllerCaptureActive = false
+        super.onDetachedFromWindow()
+    }
+
+    // When not recording the view only steers the dialog's three buttons.
+    var recording = false
+        set(value) {
+            if (field != value) {
+                held = 0
+                peak = 0
+            }
+            field = value
+        }
+    var onNav: (Int) -> Unit = {}
+    var onActivate: () -> Unit = {}
+    var onBack: () -> Unit = {}
+    private var hatX = 0
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!isGamepadDevice(event.device)) {
+            return super.dispatchKeyEvent(event)
+        }
+        if (!recording) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> onNav(-1)
+                    KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> onNav(1)
+                    KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> onActivate()
+                    KeyEvent.KEYCODE_BUTTON_B -> onBack()
+                }
+            }
+            return true
+        }
+        val bit = keyCodeToChordBit(event.keyCode) ?: return super.dispatchKeyEvent(event)
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) press(bit)
+            KeyEvent.ACTION_UP -> release(bit)
+        }
+        return true
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
+            return super.onGenericMotionEvent(event)
+        }
+        if (!recording) {
+            val x = event.getAxisValue(MotionEvent.AXIS_HAT_X)
+            val dir = if (x < -0.5f) -1 else if (x > 0.5f) 1 else 0
+            if (dir != hatX) {
+                hatX = dir
+                if (dir != 0) onNav(dir)
+            }
+            return true
+        }
+        val left = maxOf(event.getAxisValue(MotionEvent.AXIS_LTRIGGER), event.getAxisValue(MotionEvent.AXIS_BRAKE))
+        val right = maxOf(event.getAxisValue(MotionEvent.AXIS_RTRIGGER), event.getAxisValue(MotionEvent.AXIS_GAS))
+        updateTrigger(CHORD_LEFT_TRIGGER_BIT, left)
+        updateTrigger(CHORD_RIGHT_TRIGGER_BIT, right)
+        return true
+    }
+
+    private fun updateTrigger(bit: Int, value: Float) {
+        val isHeld = held and bit != 0
+        if (!isHeld && value > 0.6f) press(bit) else if (isHeld && value < 0.3f) release(bit)
+    }
+
+    private fun press(bit: Int) {
+        held = held or bit
+        if (Integer.bitCount(held) >= Integer.bitCount(peak)) {
+            peak = held
+            onPreview(peak)
+        }
+    }
+
+    private fun release(bit: Int) {
+        held = held and bit.inv()
+        if (held != 0) return
+        if (Integer.bitCount(peak) >= MIN_CHORD_BUTTONS) {
+            onChord(peak)
+        } else {
+            peak = 0
+            onPreview(0)
+        }
+    }
+}
+
+private fun keyCodeToChordBit(keyCode: Int): Int? {
+    keyCodeToSdlButton(keyCode)?.let { return 1 shl it }
+    return when (keyCode) {
+        KeyEvent.KEYCODE_BUTTON_L2 -> CHORD_LEFT_TRIGGER_BIT
+        KeyEvent.KEYCODE_BUTTON_R2 -> CHORD_RIGHT_TRIGGER_BIT
+        else -> null
+    }
+}
+
+private fun chordLabel(family: ControllerFamily, chord: Int): String {
+    if (chord == 0) return "Not set"
+    val parts = mutableListOf<String>()
+    for (button in 0..27) {
+        if (chord and (1 shl button) != 0) parts += buttonLabel(family, button)
+    }
+    if (chord and CHORD_LEFT_TRIGGER_BIT != 0) parts += axisLabel(family, SDL_GAMEPAD_AXIS_LEFT_TRIGGER)
+    if (chord and CHORD_RIGHT_TRIGGER_BIT != 0) parts += axisLabel(family, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
+    return parts.joinToString(" + ")
 }

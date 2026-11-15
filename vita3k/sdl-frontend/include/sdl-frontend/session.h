@@ -45,6 +45,10 @@ struct Hooks {
     std::function<void()> on_ime_changed;
     // The session is about to stop
     std::function<void()> on_stop;
+    // The quit hotkey chord was pressed: close the whole app
+    std::function<void()> on_quit_process;
+    // The game selection hotkey chord was pressed: show the app's game list
+    std::function<void()> on_show_library;
 };
 
 // Boots launch_request in an SDL window and runs it until the app exits or the window is closed,

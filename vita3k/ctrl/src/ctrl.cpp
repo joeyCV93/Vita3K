@@ -26,6 +26,12 @@
 #include <touch/functions.h>
 #include <util/log.h>
 
+#include <SDL3/SDL_gamepad.h>
+
+#include <bit>
+#include <iterator>
+#include <mutex>
+
 void update_keyboard_state(EmuEnvState &emuenv, const std::function<bool(input::PhysicalKeyCode)> &key_held) {
     const auto &cfg = emuenv.cfg;
     const auto is_pressed = [&](input::PhysicalKeyCode primary, input::PhysicalKeyCode alternate) {
@@ -404,4 +410,58 @@ int ctrl_get(const SceUID thread_id, EmuEnvState &emuenv, int port, SceCtrlData2
     }
 
     return nb_returned_data;
+}
+
+uint32_t ctrl_get_held_chord(EmuEnvState &emuenv) {
+    constexpr int16_t TRIGGER_PRESSED_THRESHOLD = 16000;
+
+    uint32_t held = 0;
+    std::lock_guard<std::mutex> guard(emuenv.ctrl.mutex);
+    for (const auto &[guid, ctrl] : emuenv.ctrl.controllers) {
+        SDL_Gamepad *gamepad = ctrl.controller.get();
+        if (!gamepad)
+            continue;
+
+        for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT && button < 28; button++) {
+            if (SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(button)))
+                held |= 1u << button;
+        }
+        if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > TRIGGER_PRESSED_THRESHOLD)
+            held |= CTRL_CHORD_LEFT_TRIGGER;
+        if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > TRIGGER_PRESSED_THRESHOLD)
+            held |= CTRL_CHORD_RIGHT_TRIGGER;
+    }
+    return held;
+}
+
+int ctrl_chord_button_count(uint32_t chord) {
+    return std::popcount(chord);
+}
+
+std::string ctrl_chord_to_string(uint32_t chord) {
+    static constexpr const char *BUTTON_NAMES[] = {
+        "Cross (South)", "Circle (East)", "Square (West)", "Triangle (North)", "Select", "Guide", "Start",
+        "L3", "R3", "L1", "R1", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right",
+        "Misc 1", "Paddle R1", "Paddle L1", "Paddle R2", "Paddle L2", "Touchpad",
+        "Misc 2", "Misc 3", "Misc 4", "Misc 5", "Misc 6"
+    };
+    static_assert(std::size(BUTTON_NAMES) == SDL_GAMEPAD_BUTTON_COUNT, "button name table out of sync with SDL");
+
+    std::string result;
+    const auto append = [&result](const char *name) {
+        if (!result.empty())
+            result += " + ";
+        result += name;
+    };
+
+    for (int button = 0; button < static_cast<int>(std::size(BUTTON_NAMES)); button++) {
+        if (chord & (1u << button))
+            append(BUTTON_NAMES[button]);
+    }
+    if (chord & CTRL_CHORD_LEFT_TRIGGER)
+        append("L2");
+    if (chord & CTRL_CHORD_RIGHT_TRIGGER)
+        append("R2");
+
+    return result.empty() ? "None" : result;
 }

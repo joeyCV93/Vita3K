@@ -299,6 +299,9 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun startUpdateCheckIfEnabled() {
+        // Custom build: never check upstream for updates at startup (the official release isn't a valid update for this fork).
+        // The manual "Check for updates" action still works if someone taps it.
+        if (true) return
         if (startupUpdateCheckStarted) return
 
         startupUpdateCheckStarted = true
