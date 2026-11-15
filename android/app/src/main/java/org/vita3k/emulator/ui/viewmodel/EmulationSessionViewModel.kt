@@ -87,6 +87,10 @@ class EmulationSessionViewModel(application: Application) : AndroidViewModel(app
         emulator.setControllerOverlayState(visibleMask, uiState.isEditingControls, false)
     }
 
+    // Custom: set by the menu UI. Called for Back / B while the menu is open; returns true if it stepped back one
+    // level (e.g. from the Settings tab to the Session tab) and so the menu should stay open.
+    var menuBackHandler: (() -> Boolean)? = null
+
     fun handleBackPressed(emulator: Emulator): Boolean {
         return when {
             uiState.isEditingControls -> {
@@ -94,7 +98,9 @@ class EmulationSessionViewModel(application: Application) : AndroidViewModel(app
                 true
             }
             uiState.showMenu -> {
-                closeMenu(emulator)
+                if (menuBackHandler?.invoke() != true) {
+                    closeMenu(emulator)
+                }
                 true
             }
             else -> {
@@ -162,7 +168,16 @@ class EmulationSessionViewModel(application: Application) : AndroidViewModel(app
             if (!setNativePauseReasonEnabled(NativeLib.PAUSE_REASON_MENU, true)) {
                 return
             }
-            uiState = uiState.copy(isPaused = true, statusMessage = null)
+            // Custom: pausing hands over to the game's own Resume / Exit pause screen, which a controller can use.
+            // Leaving this menu open as well put two menus on screen at once, so close it here.
+            setNativeInputIntercepted(false)
+            uiState = uiState.copy(
+                showMenu = false,
+                isPaused = true,
+                isEditingControls = false,
+                showExitConfirmation = false,
+                statusMessage = null
+            )
             emulator.setControllerOverlayState(0, false, false)
         }
     }

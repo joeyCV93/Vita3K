@@ -101,6 +101,8 @@ SDLMAIN_DECLSPEC int SDL_main(int argc, char *argv[]) {
         .on_guide_button = [] { call_activity("openPauseMenuFromController", "()V"); },
         .on_ime_changed = [] { ime::notify_ime_state_changed(); },
         .on_stop = [] { detach_overlay_virtual_controller(); },
+        .on_quit_process = [] { call_activity("quitProcess", "()V"); },
+        .on_show_library = [] { call_activity("showGameLibrary", "()V"); },
     };
 
     return sdl_frontend::run(*emuenv, *session_controller, AppLaunchRequest{ .app_path = title_id }, hooks);

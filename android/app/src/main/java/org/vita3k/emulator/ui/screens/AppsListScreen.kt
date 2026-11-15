@@ -48,6 +48,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -938,15 +943,26 @@ private fun AppsListView(
                     headlineColor = MaterialTheme.colorScheme.onSurface,
                     supportingColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
-                modifier = Modifier.combinedClickable(
-                    onClick = {
-                        if (selectionMode) onSelectionClick(app) else onAppSelected(app)
-                    },
-                    onLongClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (selectionMode) onSelectionClick(app) else onActionLongPress(app)
+                modifier = Modifier
+                    // Custom: the controller's Select button does the same as press-and-hold (opens the game's menu)
+                    .onKeyEvent { keyEvent ->
+                        if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.ButtonSelect) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (selectionMode) onSelectionClick(app) else onActionLongPress(app)
+                            true
+                        } else {
+                            false
+                        }
                     }
-                )
+                    .combinedClickable(
+                        onClick = {
+                            if (selectionMode) onSelectionClick(app) else onAppSelected(app)
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (selectionMode) onSelectionClick(app) else onActionLongPress(app)
+                        }
+                    )
             )
         }
     }
@@ -998,6 +1014,16 @@ private fun AppGridItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            // Custom: the controller's Select button does the same as press-and-hold (opens the game's menu)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.ButtonSelect) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                    true
+                } else {
+                    false
+                }
+            }
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {

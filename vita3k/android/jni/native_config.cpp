@@ -113,6 +113,9 @@ struct EmulatorConfigFields {
     jfieldID performanceOverlayDetail = nullptr;
     jfieldID performanceOverlayPosition = nullptr;
     jfieldID screenshotFormat = nullptr;
+    jfieldID menuHotkeyChord = nullptr;
+    jfieldID exitHotkeyChord = nullptr;
+    jfieldID libraryHotkeyChord = nullptr;
 };
 
 EmulatorConfigFields resolve_config_fields(JNIEnv *env) {
@@ -198,6 +201,9 @@ EmulatorConfigFields resolve_config_fields(JNIEnv *env) {
     fields.performanceOverlayDetail = env->GetFieldID(fields.cls, "performanceOverlayDetail", "I");
     fields.performanceOverlayPosition = env->GetFieldID(fields.cls, "performanceOverlayPosition", "I");
     fields.screenshotFormat = env->GetFieldID(fields.cls, "screenshotFormat", "I");
+    fields.menuHotkeyChord = env->GetFieldID(fields.cls, "menuHotkeyChord", "I");
+    fields.exitHotkeyChord = env->GetFieldID(fields.cls, "exitHotkeyChord", "I");
+    fields.libraryHotkeyChord = env->GetFieldID(fields.cls, "libraryHotkeyChord", "I");
     return fields;
 }
 
@@ -411,6 +417,9 @@ void fill_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     env->SetIntField(obj, fields.performanceOverlayDetail, static_cast<jint>(config.performance_overlay_detail));
     env->SetIntField(obj, fields.performanceOverlayPosition, static_cast<jint>(config.performance_overlay_position));
     env->SetIntField(obj, fields.screenshotFormat, static_cast<jint>(config.screenshot_format));
+    env->SetIntField(obj, fields.menuHotkeyChord, static_cast<jint>(config.menu_hotkey_chord));
+    env->SetIntField(obj, fields.exitHotkeyChord, static_cast<jint>(config.exit_hotkey_chord));
+    env->SetIntField(obj, fields.libraryHotkeyChord, static_cast<jint>(config.library_hotkey_chord));
 }
 
 void read_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fields,
@@ -566,6 +575,9 @@ void read_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
         emuenv->kernel.debugger.dump_elfs = env->GetBooleanField(obj, fields.dumpElfs) != JNI_FALSE;
     }
     config.screenshot_format = static_cast<int>(env->GetIntField(obj, fields.screenshotFormat));
+    config.menu_hotkey_chord = static_cast<int>(env->GetIntField(obj, fields.menuHotkeyChord));
+    config.exit_hotkey_chord = static_cast<int>(env->GetIntField(obj, fields.exitHotkeyChord));
+    config.library_hotkey_chord = static_cast<int>(env->GetIntField(obj, fields.libraryHotkeyChord));
 }
 
 jintArray make_restart_required_array(JNIEnv *env, const std::vector<config::RestartRequiredSetting> &values) {

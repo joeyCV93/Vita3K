@@ -1,6 +1,7 @@
 package org.vita3k.emulator.ui.screens.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
@@ -53,14 +55,51 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.vita3k.emulator.R
 
+/** Custom: lets the in-game menu's B / Back handling close an open inline option list first. */
+internal object ControllerBackHandlers {
+    @Volatile
+    var inlinePopup: (() -> Boolean)? = null
+}
+
 private val SectionShape = RoundedCornerShape(28.dp)
 private val TileShape = RoundedCornerShape(20.dp)
+
+/**
+ * Custom: a strong, obvious highlight for whichever control the controller has focused (thick ring + tint).
+ * Material's own focus indication is a faint overlay that is hard to see across a room. Apply this to the outside
+ * of a control, before its click/focus handling, so it can see the control's focus state.
+ */
+@Composable
+internal fun Modifier.controllerFocusRing(shape: Shape = TileShape): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    val ring = MaterialTheme.colorScheme.primary
+    return this
+        .onFocusChanged { focused = it.hasFocus }
+        .then(
+            if (focused) {
+                Modifier
+                    .background(ring.copy(alpha = 0.30f), shape)
+                    .border(4.dp, ring, shape)
+            } else {
+                Modifier
+            }
+        )
+}
 
 @Composable
 internal fun settingsFilterChipColors() = FilterChipDefaults.filterChipColors(
@@ -86,6 +125,7 @@ internal fun SettingsCategoryStrip(
             FilterChip(
                 selected = category == selectedCategory,
                 onClick = { onCategorySelected(category) },
+                modifier = Modifier.controllerFocusRing(RoundedCornerShape(10.dp)),
                 colors = settingsFilterChipColors(),
                 label = { Text(category.label()) },
                 leadingIcon = {
@@ -269,6 +309,34 @@ internal fun SettingsScrollableChoiceSelector(
 ) {
     val clampedSelectedIndex = if (options.isEmpty()) 0 else selectedIndex.coerceIn(0, options.lastIndex)
     var expanded by remember { mutableStateOf(false) }
+    val headerRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val itemRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    var wasExpanded by remember { mutableStateOf(false) }
+    // Focus the current option when the list opens, and hand focus back to the row when it closes.
+    androidx.compose.runtime.LaunchedEffect(expanded) {
+        if (expanded) {
+            kotlinx.coroutines.delay(50)
+            runCatching { itemRequester.requestFocus() }
+        } else if (wasExpanded) {
+            runCatching { headerRequester.requestFocus() }
+        }
+        wasExpanded = expanded
+    }
+    // B (or Back) closes the list and keeps the old value.
+    androidx.compose.runtime.DisposableEffect(expanded) {
+        if (expanded) {
+            val handler: () -> Boolean = {
+                expanded = false
+                true
+            }
+            ControllerBackHandlers.inlinePopup = handler
+            onDispose {
+                if (ControllerBackHandlers.inlinePopup === handler) ControllerBackHandlers.inlinePopup = null
+            }
+        } else {
+            onDispose { }
+        }
+    }
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.35f else 0.18f),
@@ -312,7 +380,11 @@ internal fun SettingsScrollableChoiceSelector(
                         readOnly = true,
                         enabled = enabled,
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        // Custom: the read-only field used to grab focus and swallow D-pad keys, trapping the controller.
+                        // The overlay box below is the focus target instead.
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusProperties { canFocus = false },
                         textStyle = MaterialTheme.typography.bodyMedium,
                         trailingIcon = {
                             Icon(
@@ -339,30 +411,44 @@ internal fun SettingsScrollableChoiceSelector(
                             .fillMaxWidth()
                             .height(56.dp)
                             .clip(RoundedCornerShape(12.dp))
+                            .focusRequester(headerRequester)
+                            .controllerFocusRing(RoundedCornerShape(12.dp))
                             .clickable(
                                 enabled = enabled,
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { expanded = true }
+                            ) { expanded = !expanded }
                     )
-                    DropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false },
-                        modifier = Modifier.heightIn(max = 320.dp)
+                }
+                // Custom: the options are listed inline instead of in a pop-up window, so a controller can
+                // reach them (D-pad up/down to move, A to pick, B to close without changing anything).
+                if (expanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .heightIn(max = 280.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                            .verticalScroll(rememberScrollState())
                     ) {
                         options.forEachIndexed { index, option ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = option,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                onClick = {
-                                    expanded = false
-                                    onSelected(index)
-                                }
+                            Text(
+                                text = option,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (index == clampedSelectedIndex) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (index == clampedSelectedIndex) Modifier.focusRequester(itemRequester) else Modifier)
+                                    .controllerFocusRing(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        expanded = false
+                                        onSelected(index)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp)
                             )
                         }
                     }
@@ -397,7 +483,8 @@ internal fun SettingsActionRow(
         if (!actionLabel.isNullOrBlank() && onActionClick != null) {
             TextButton(
                 onClick = onActionClick,
-                enabled = enabled && actionEnabled
+                enabled = enabled && actionEnabled,
+                modifier = Modifier.controllerFocusRing(CircleShape)
             ) {
                 Text(actionLabel)
             }
@@ -460,7 +547,30 @@ internal fun SettingsSliderRow(
                 steps = steps,
                 enabled = enabled,
                 interactionSource = interactionSource,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    // Custom: controller D-pad left / right changes the value by one step while the slider is focused
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (!enabled || keyEvent.type != KeyEventType.KeyDown) {
+                            false
+                        } else {
+                            val span = valueRange.endInclusive - valueRange.start
+                            val stepSize = if (steps > 0) span / (steps + 1) else span / 20f
+                            when (keyEvent.key) {
+                                Key.DirectionLeft -> {
+                                    onValueChange((value - stepSize).coerceIn(valueRange))
+                                    true
+                                }
+                                Key.DirectionRight -> {
+                                    onValueChange((value + stepSize).coerceIn(valueRange))
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                    }
+                    .controllerFocusRing(RoundedCornerShape(12.dp))
             )
         }
     }
@@ -497,6 +607,7 @@ internal fun SettingsChoiceChips(
             FilterChip(
                 selected = index == selectedIndex,
                 onClick = { onSelected(index) },
+                modifier = Modifier.controllerFocusRing(RoundedCornerShape(10.dp)),
                 colors = settingsFilterChipColors(),
                 label = { Text(option) }
             )
@@ -575,7 +686,10 @@ internal fun SettingsHelpButton(
     help: SettingsHelpEntry,
     onShowHelp: (SettingsHelpEntry) -> Unit
 ) {
-    IconButton(onClick = { onShowHelp(help) }) {
+    IconButton(
+        onClick = { onShowHelp(help) },
+        modifier = Modifier.controllerFocusRing(CircleShape)
+    ) {
         Icon(
             imageVector = Icons.Default.Info,
             contentDescription = androidx.compose.ui.res.stringResource(R.string.settings_cd_show_info),
@@ -601,6 +715,7 @@ private fun SettingsRowContainer(
         modifier = modifier
             .fillMaxWidth()
             .clip(TileShape)
+            .controllerFocusRing(TileShape)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(

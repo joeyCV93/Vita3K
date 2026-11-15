@@ -82,6 +82,16 @@ bool dump_data(const fs::path &path, const void *data, const std::streamsize siz
 template <typename T>
 static bool read_data(const fs::path &path, std::vector<T> &data) {
     data.clear();
+#ifdef __ANDROID__
+    // Custom: an absolute path is a plain file. If it is missing, SDL_IOFromFile falls back to the APK asset lookup,
+    // which needs SDL's Java side to be set up and aborts the whole process when it isn't yet (for example while the
+    // game list is scanned at startup). A game folder with a missing file would then crash the app on launch.
+    if (path.is_absolute()) {
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec))
+            return false;
+    }
+#endif
     SDL_IOStream *file = SDL_IOFromFile(fs_utils::path_to_utf8(path).c_str(), "rb");
     if (!file) {
         return false;

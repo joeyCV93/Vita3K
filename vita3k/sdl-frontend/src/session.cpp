@@ -114,6 +114,73 @@ void update_mouse_input(EmuEnvState &emuenv, SDL_Window *window) {
 #endif
 }
 
+// Custom hotkeys: a chord is a set of controller buttons held together (see ctrl_get_held_chord).
+enum class ChordAction {
+    None,
+    QuitApp, // close Vita3K completely and hand control back to Android / the frontend
+    BackToLibrary, // stop the game and return to the game selection screen
+};
+
+struct ChordHold {
+    bool started = false;
+    bool fired = false;
+    uint64_t start_ms = 0;
+
+    // True once, when the chord has been held for hold_ms (0 = fires as soon as it is pressed).
+    // Fires once per press: the chord has to be released before it can fire again.
+    bool update(bool held, uint64_t now, uint64_t hold_ms) {
+        if (!held) {
+            started = false;
+            fired = false;
+            return false;
+        }
+        if (!started) {
+            started = true;
+            start_ms = now;
+        }
+        if (!fired && now - start_ms >= hold_ms) {
+            fired = true;
+            return true;
+        }
+        return false;
+    }
+};
+
+struct ChordState {
+    bool menu_was_held = false;
+    ChordHold quit_hold;
+    ChordHold library_hold;
+};
+
+// Opens the menu on the press edge of the menu chord. Returns the action whose hold chord has been held long enough.
+ChordAction poll_controller_chords(EmuEnvState &emuenv, const Hooks &hooks, ChordState &state) {
+    // The quit / game selection chords act immediately, the same as the menu chord
+    constexpr uint64_t HOLD_MS = 0;
+
+    const auto menu_chord = static_cast<uint32_t>(emuenv.cfg.menu_hotkey_chord);
+    const auto quit_chord = static_cast<uint32_t>(emuenv.cfg.exit_hotkey_chord);
+    const auto library_chord = static_cast<uint32_t>(emuenv.cfg.library_hotkey_chord);
+    if (menu_chord == 0 && quit_chord == 0 && library_chord == 0) {
+        state = {};
+        return ChordAction::None;
+    }
+
+    const uint32_t held = ctrl_get_held_chord(emuenv);
+    const auto chord_held = [held](uint32_t chord) { return chord != 0 && (held & chord) == chord; };
+
+    const bool menu_held = chord_held(menu_chord);
+    if (menu_held && !state.menu_was_held && hooks.on_guide_button)
+        hooks.on_guide_button();
+    state.menu_was_held = menu_held;
+
+    const uint64_t now = SDL_GetTicks();
+    if (state.quit_hold.update(chord_held(quit_chord), now, HOLD_MS))
+        return ChordAction::QuitApp;
+    if (state.library_hold.update(chord_held(library_chord), now, HOLD_MS))
+        return ChordAction::BackToLibrary;
+    return ChordAction::None;
+}
+
 void notify_ime_changed(const Hooks &hooks) {
     if (hooks.on_ime_changed)
         hooks.on_ime_changed();
@@ -356,6 +423,7 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
         app::LaunchRuntimeMetrics runtime_metrics{};
 
         bool running = !pending_launch_request.has_value();
+        ChordState chord_state;
         while (running) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
@@ -428,6 +496,26 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
             update_mouse_input(emuenv, window);
             update_keyboard(emuenv, window);
 
+            switch (poll_controller_chords(emuenv, hooks, chord_state)) {
+            case ChordAction::QuitApp:
+                LOG_INFO("Quit hotkey chord pressed, closing Vita3K");
+                // Close the screen straight away so the previous app (e.g. ES-DE) is shown immediately
+                if (hooks.on_quit_process)
+                    hooks.on_quit_process();
+                running = false;
+                break;
+            case ChordAction::BackToLibrary:
+                LOG_INFO("Game selection hotkey chord pressed, exiting the game like the menu Exit button");
+                // Same action as the Exit button in the in-game menu; it asks the session to quit itself
+                if (hooks.on_show_library)
+                    hooks.on_show_library();
+                else
+                    running = false;
+                break;
+            case ChordAction::None:
+                break;
+            }
+
             if (!pending_launch_request) {
                 if (auto request = emuenv.take_app_launch_request()) {
                     pending_launch_request = std::move(request);
@@ -461,6 +549,7 @@ int run(EmuEnvState &emuenv, app::AppSessionController &session, AppLaunchReques
         cleanup_launch(relaunch_requested
                 ? app::AppSessionStopReason::Relaunch
                 : app::AppSessionStopReason::UserRequest);
+
     } while (relaunch_requested);
 
     return exit_code;
